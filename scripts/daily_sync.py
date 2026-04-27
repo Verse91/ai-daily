@@ -6,16 +6,18 @@ AI Daily - 每日同步脚本
 
 import os
 import json
+import re
 from datetime import datetime
 from tavily import TavilyClient
-from psycopg2 import sql
 import psycopg2
+import requests
 
 # ============ 配置 ============
-TAVILY_API_KEY = os.environ.get('TAVILY_API_KEY')
-MINIMAX_API_KEY = os.environ.get('MINIMAX_API_KEY')
+TAVILY_API_KEY = os.environ.get('TAVILY_API_KEY', 'tvly-your-tavily-key')
+MINIMAX_API_KEY = os.environ.get('MINIMAX_API_KEY', 'your-minimax-key')
 MINIMAX_API_URL = os.environ.get('MINIMAX_API_URL', 'https://api.minimax.chat/v1')
-DATABASE_URL = os.environ.get('DATABASE_URL')
+MINIMAX_MODEL = os.environ.get('MINIMAX_MODEL', 'MiniMax-01')
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/ai_daily')
 
 SEARCH_QUERIES = [
     'AI news today 2026',
@@ -117,8 +119,11 @@ def search_all():
     all_results = []
     for query in SEARCH_QUERIES:
         print(f'[Search] 查询: {query}')
-        results = search_tavily(query)
-        all_results.extend(results)
+        try:
+            results = search_tavily(query)
+            all_results.extend(results)
+        except Exception as e:
+            print(f'[Search] 查询失败: {e}')
     
     # 去重
     seen = set()
@@ -132,15 +137,58 @@ def search_all():
 
 # ============ MiniMax 摘要生成 ============
 def generate_summary(title, content):
-    """调用 MiniMax 生成中文摘要"""
-    # TODO: 实现 MiniMax API 调用
-    # 暂时返回 Tavily 的原始内容
-    return content[:200] if content else ''
+    """调用 MiniMax 生成中文摘要（100字内）"""
+    if not MINIMAX_API_KEY or MINIMAX_API_KEY == 'your-minimax-key':
+        print('[MiniMax] 未配置 API Key，使用原始内容')
+        return content[:200] if content else ''
+    
+    prompt = f"""请为以下AI新闻生成一条简短的中文摘要（不超过100字）：
+
+标题：{title}
+内容：{content[:500] if content else '无详细信息'}
+
+只输出摘要文字，不要其他解释。"""
+    
+    try:
+        response = requests.post(
+            f"{MINIMAX_API_URL}/text/chatcompletion_v2",
+            headers={
+                "Authorization": f"Bearer {MINIMAX_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": MINIMAX_MODEL,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 200,
+                "temperature": 0.3,
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            # 解析 MiniMax 的响应格式
+            choices = result.get('choices', [])
+            if choices and len(choices) > 0:
+                summary = choices[0].get('message', {}).get('content', '')
+                # 清理特殊字符
+                summary = re.sub(r'[#*`\[\]]', '', summary).strip()
+                return summary
+        
+        print(f'[MiniMax] API 错误: {response.status_code} - {response.text[:100]}')
+        return content[:200] if content else ''
+        
+    except Exception as e:
+        print(f'[MiniMax] 调用失败: {e}')
+        return content[:200] if content else ''
 
 # ============ 主流程 ============
 def sync():
     """每日同步主流程"""
     print(f'[Sync] 开始同步 - {datetime.now().isoformat()}')
+    start_time = datetime.now()
     
     # 初始化数据库
     init_db()
@@ -149,37 +197,44 @@ def sync():
     results = search_all()
     print(f'[Search] 获取 {len(results)} 条结果')
     
-    # 逐条处理
-    for r in results:
-        if news_exists(r['url']):
-            print(f'[Skip] 已存在: {r["url"]}')
-            continue
-        
-        # 生成摘要
-        summary = generate_summary(r['title'], r.get('content', ''))
-        
-        # 提取来源名
-        source = r.get('source', 'Unknown')
-        if '://' in source:
-            source = source.split('://')[1].split('/')[0]
-        
-        # 插入数据库
-        insert_news(
-            title=r['title'],
-            summary=summary,
-            url=r['url'],
-            source=source,
-            published_at=r.get('published_at')
-        )
+    if not results:
+        print('[Sync] 没有获取到任何结果')
+        return
     
-    print(f'[Sync] 同步完成 - {datetime.now().isoformat()}')
+    # 逐条处理
+    inserted = 0
+    skipped = 0
+    for r in results:
+        try:
+            if news_exists(r['url']):
+                print(f'[Skip] 已存在: {r["url"][:60]}...')
+                skipped += 1
+                continue
+            
+            # 生成摘要
+            summary = generate_summary(r['title'], r.get('content', ''))
+            
+            # 提取来源名
+            source = r.get('source', 'Unknown')
+            if '://' in source:
+                source = source.split('://')[1].split('/')[0]
+            
+            # 插入数据库
+            insert_news(
+                title=r['title'],
+                summary=summary,
+                url=r['url'],
+                source=source,
+                published_at=r.get('published_at')
+            )
+            inserted += 1
+            
+        except Exception as e:
+            print(f'[Sync] 处理失败: {e}')
+            continue
+    
+    elapsed = (datetime.now() - start_time).total_seconds()
+    print(f'[Sync] 完成！插入 {inserted} 条，跳过 {skipped} 条，耗时 {elapsed:.1f}秒')
 
 if __name__ == '__main__':
-    if not TAVILY_API_KEY:
-        print('[Error] TAVILY_API_KEY 未设置')
-        exit(1)
-    if not DATABASE_URL:
-        print('[Error] DATABASE_URL 未设置')
-        exit(1)
-    
     sync()
