@@ -1,0 +1,16 @@
+[
+  {
+    "id": 1,
+    "title": "AI Native时代：初创公司如何用AI重新定义商业模式",
+    "summary": "从OpenAI到Anthropic，AI原生公司正在颠覆传统商业逻辑。本文深入分析AI Native的核心特征，以及初创公司如何在产品、增长和盈利模式上实现突破性创新。",
+    "tags": ["AI Native", "创业", "商业模式"],
+    "published_at": "2026-04-25"
+  },
+  {
+    "id": 2,
+    "title": "订阅制AI助手：SaaS定价的新篇章",
+    "summary": "随着ChatGPT Plus、Claude Pro等服务流行，AI助手订阅模式正在成为主流。本文探讨不同定价策略对用户留存和收入增长的影响。",
+    "tags": ["SaaS", "定价策略", "AI助手"],
+    "published_at": "2026-04-23"
+  }
+]
